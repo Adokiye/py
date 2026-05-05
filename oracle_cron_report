@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import csv
+import io
 import subprocess
 import smtplib
 from datetime import datetime
@@ -16,6 +18,8 @@ HOSTS = [
     ("10.172.136.141", "p01_teller_nonprod"),
 ]
 
+CSV_HEADERS = ["timestamp", "server", "ip", "status", "cron_line"]
+
 
 def check_oracle_cron(ip):
     cmd = [
@@ -31,22 +35,15 @@ def check_oracle_cron(ip):
         cmd,
         capture_output=True,
         text=True,
-        timeout=40
+        timeout=40,
     )
 
 
-def build_report():
-    report = []
-    report.append("Oracle Crontab Monitoring Report")
-    report.append(f"Generated: {datetime.now()}")
-    report.append("=" * 70)
-    report.append("")
+def collect_rows():
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    rows = []
 
     for ip, name in HOSTS:
-        report.append("=" * 70)
-        report.append(f"Server: {name} ({ip})")
-        report.append("=" * 70)
-
         try:
             result = check_oracle_cron(ip)
 
@@ -54,50 +51,81 @@ def build_report():
                 cron_output = result.stdout.strip()
 
                 if cron_output:
-                    report.append("Status: MONITORING FOUND")
-                    report.append("")
-                    report.append(cron_output)
+                    cron_lines = [
+                        line for line in cron_output.splitlines()
+                        if line.strip() and not line.strip().startswith("#")
+                    ]
+                    if cron_lines:
+                        for line in cron_lines:
+                            rows.append([timestamp, name, ip, "MONITORING FOUND", line])
+                    else:
+                        rows.append([timestamp, name, ip, "NO ACTIVE CRON ENTRIES", ""])
                 else:
-                    report.append("Status: NO CRONTAB FOUND")
+                    rows.append([timestamp, name, ip, "NO CRONTAB FOUND", ""])
 
             else:
-                report.append("Status: FAILED")
-                report.append(result.stderr.strip() or result.stdout.strip())
+                err = (result.stderr.strip() or result.stdout.strip()).replace("\n", " | ")
+                rows.append([timestamp, name, ip, "FAILED", err])
 
         except subprocess.TimeoutExpired:
-            report.append("Status: TIMEOUT")
+            rows.append([timestamp, name, ip, "TIMEOUT", ""])
 
         except Exception as e:
-            report.append(f"Status: ERROR - {str(e)}")
+            rows.append([timestamp, name, ip, "ERROR", str(e)])
 
-        report.append("")
-
-    return "\n".join(report)
+    return rows
 
 
-def send_email(report):
+def rows_to_csv(rows):
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(CSV_HEADERS)
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
+def send_email(csv_text, csv_filename, summary_text):
     msg = EmailMessage()
     msg["From"] = EMAIL_FROM
     msg["To"] = ", ".join(EMAIL_TO)
     msg["Subject"] = f"Oracle Crontab Report - {datetime.now().strftime('%Y-%m-%d')}"
 
-    msg.set_content(report)
+    msg.set_content(summary_text)
+    msg.add_attachment(
+        csv_text.encode("utf-8"),
+        maintype="text",
+        subtype="csv",
+        filename=csv_filename,
+    )
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.send_message(msg)
 
 
 def main():
-    report = build_report()
+    rows = collect_rows()
+    csv_text = rows_to_csv(rows)
 
-    report_file = f"/tmp/oracle_cron_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_filename = f"oracle_cron_report_{stamp}.csv"
+    csv_path = f"/tmp/{csv_filename}"
 
-    with open(report_file, "w") as f:
-        f.write(report)
+    with open(csv_path, "w", newline="") as f:
+        f.write(csv_text)
 
-    send_email(report)
+    summary_lines = [
+        "Oracle Crontab Monitoring Report",
+        f"Generated: {datetime.now()}",
+        f"Hosts checked: {len(HOSTS)}",
+        f"Rows in CSV:   {len(rows)}",
+        "",
+        "See attached CSV for details.",
+    ]
+    summary_text = "\n".join(summary_lines)
 
-    print(f"Report generated: {report_file}")
+    send_email(csv_text, csv_filename, summary_text)
+
+    print(f"Report generated: {csv_path}")
     print("Email sent.")
 
 
