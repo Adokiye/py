@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 
-import csv
 import io
 import subprocess
 import smtplib
 from datetime import datetime
 from email.message import EmailMessage
+from email.utils import formataddr
+
+from openpyxl import Workbook
 
 SSH_USER = "fsalami"
 
-EMAIL_FROM = "fsalami@netspend.com"
+EMAIL_FROM_NAME = "Oracle Crontab Report"
+EMAIL_FROM_ADDR = "fsalami@netspend.com"
 EMAIL_TO = ["fsalami@netspend.com"]
 SMTP_SERVER = "localhost"
 SMTP_PORT = 25
@@ -18,7 +21,7 @@ HOSTS = [
     ("10.172.136.141", "p01_teller_nonprod"),
 ]
 
-CSV_HEADERS = ["timestamp", "server", "ip", "status", "cron_line"]
+SHEET_HEADERS = ["timestamp", "server", "ip", "status", "cron_line"]
 
 
 def check_oracle_cron(ip):
@@ -39,63 +42,83 @@ def check_oracle_cron(ip):
     )
 
 
-def collect_rows():
+def collect_host_rows(ip, name):
     timestamp = datetime.now().isoformat(timespec="seconds")
     rows = []
 
-    for ip, name in HOSTS:
-        try:
-            result = check_oracle_cron(ip)
+    try:
+        result = check_oracle_cron(ip)
 
-            if result.returncode == 0:
-                cron_output = result.stdout.strip()
+        if result.returncode == 0:
+            cron_output = result.stdout.strip()
 
-                if cron_output:
-                    cron_lines = [
-                        line for line in cron_output.splitlines()
-                        if line.strip() and not line.strip().startswith("#")
-                    ]
-                    if cron_lines:
-                        for line in cron_lines:
-                            rows.append([timestamp, name, ip, "MONITORING FOUND", line])
-                    else:
-                        rows.append([timestamp, name, ip, "NO ACTIVE CRON ENTRIES", ""])
+            if cron_output:
+                cron_lines = [
+                    line for line in cron_output.splitlines()
+                    if line.strip() and not line.strip().startswith("#")
+                ]
+                if cron_lines:
+                    for line in cron_lines:
+                        rows.append([timestamp, name, ip, "MONITORING FOUND", line])
                 else:
-                    rows.append([timestamp, name, ip, "NO CRONTAB FOUND", ""])
-
+                    rows.append([timestamp, name, ip, "NO ACTIVE CRON ENTRIES", ""])
             else:
-                err = (result.stderr.strip() or result.stdout.strip()).replace("\n", " | ")
-                rows.append([timestamp, name, ip, "FAILED", err])
+                rows.append([timestamp, name, ip, "NO CRONTAB FOUND", ""])
 
-        except subprocess.TimeoutExpired:
-            rows.append([timestamp, name, ip, "TIMEOUT", ""])
+        else:
+            err = (result.stderr.strip() or result.stdout.strip()).replace("\n", " | ")
+            rows.append([timestamp, name, ip, "FAILED", err])
 
-        except Exception as e:
-            rows.append([timestamp, name, ip, "ERROR", str(e)])
+    except subprocess.TimeoutExpired:
+        rows.append([timestamp, name, ip, "TIMEOUT", ""])
+
+    except Exception as e:
+        rows.append([timestamp, name, ip, "ERROR", str(e)])
 
     return rows
 
 
-def rows_to_csv(rows):
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(CSV_HEADERS)
-    writer.writerows(rows)
+def safe_sheet_title(name):
+    invalid = set(r"[]:*?/\\")
+    cleaned = "".join("_" if c in invalid else c for c in name)
+    return cleaned[:31] or "sheet"
+
+
+def build_workbook():
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    total_rows = 0
+    for ip, name in HOSTS:
+        rows = collect_host_rows(ip, name)
+        total_rows += len(rows)
+
+        ws = wb.create_sheet(title=safe_sheet_title(name))
+        ws.append(SHEET_HEADERS)
+        for row in rows:
+            ws.append(row)
+
+    return wb, total_rows
+
+
+def workbook_to_bytes(wb):
+    buf = io.BytesIO()
+    wb.save(buf)
     return buf.getvalue()
 
 
-def send_email(csv_text, csv_filename, summary_text):
+def send_email(xlsx_bytes, xlsx_filename, summary_text):
     msg = EmailMessage()
-    msg["From"] = EMAIL_FROM
+    msg["From"] = formataddr((EMAIL_FROM_NAME, EMAIL_FROM_ADDR))
     msg["To"] = ", ".join(EMAIL_TO)
     msg["Subject"] = f"Oracle Crontab Report - {datetime.now().strftime('%Y-%m-%d')}"
 
     msg.set_content(summary_text)
     msg.add_attachment(
-        csv_text.encode("utf-8"),
-        maintype="text",
-        subtype="csv",
-        filename=csv_filename,
+        xlsx_bytes,
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=xlsx_filename,
     )
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
@@ -103,29 +126,29 @@ def send_email(csv_text, csv_filename, summary_text):
 
 
 def main():
-    rows = collect_rows()
-    csv_text = rows_to_csv(rows)
+    wb, total_rows = build_workbook()
+    xlsx_bytes = workbook_to_bytes(wb)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_filename = f"oracle_cron_report_{stamp}.csv"
-    csv_path = f"/tmp/{csv_filename}"
+    xlsx_filename = f"oracle_cron_report_{stamp}.xlsx"
+    xlsx_path = f"/tmp/{xlsx_filename}"
 
-    with open(csv_path, "w", newline="") as f:
-        f.write(csv_text)
+    with open(xlsx_path, "wb") as f:
+        f.write(xlsx_bytes)
 
     summary_lines = [
         "Oracle Crontab Monitoring Report",
         f"Generated: {datetime.now()}",
-        f"Hosts checked: {len(HOSTS)}",
-        f"Rows in CSV:   {len(rows)}",
+        f"Hosts checked: {len(HOSTS)} (one sheet per host)",
+        f"Total rows:    {total_rows}",
         "",
-        "See attached CSV for details.",
+        "See attached XLSX for details.",
     ]
     summary_text = "\n".join(summary_lines)
 
-    send_email(csv_text, csv_filename, summary_text)
+    send_email(xlsx_bytes, xlsx_filename, summary_text)
 
-    print(f"Report generated: {csv_path}")
+    print(f"Report generated: {xlsx_path}")
     print("Email sent.")
 
 
