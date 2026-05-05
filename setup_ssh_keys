@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+
+import os
+import subprocess
+
+SSH_USER = "fsalami"
+SSH_KEY = os.path.expanduser("~/.ssh/id_rsa.pub")
+
+HOSTS = [
+    ("10.35.195.10", "lhdb01"),
+    ("10.35.195.11", "lhdb02"),
+    ("10.35.195.21", "lhdb0a01"),
+    ("10.35.195.36", "lhdb0b01"),
+    ("10.173.29.45", "lhproddb0a01"),
+    ("10.173.29.75", "lhproddb0b01"),
+    ("10.168.50.52", "ratproddb0a01"),
+    ("10.170.201.25", "use1proddb0b01"),
+    ("10.170.201.103", "use1proddb0a01"),
+]
+
+for ip, name in HOSTS:
+    print(f"\nSetting up SSH key for {name} ({ip})")
+
+    cmd = [
+        "ssh-copy-id",
+        "-o", "StrictHostKeyChecking=no",
+        "-i", SSH_KEY,
+        f"{SSH_USER}@{ip}",
+    ]
+
+    result = subprocess.run(cmd)
+
+    if result.returncode == 0:
+        print(f"SUCCESS: {name} ({ip})")
+    else:
+        print(f"FAILED: {name} ({ip})")
