@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+
+import subprocess
+import smtplib
+from datetime import datetime
+from email.message import EmailMessage
+
+SSH_USER = "fsalami"
+
+EMAIL_FROM = "fsalami@netspend.com"
+EMAIL_TO = ["fsalami@netspend.com"]
+SMTP_SERVER = "localhost"
+SMTP_PORT = 25
+
+HOSTS = [
+    ("10.35.195.10", "lhdb01"),
+    ("10.35.195.11", "lhdb02"),
+    ("10.35.195.21", "lhdb0a01"),
+    ("10.35.195.36", "lhdb0b01"),
+    ("10.173.29.45", "lhproddb0a01"),
+    ("10.173.29.75", "lhproddb0b01"),
+    ("10.168.50.52", "ratproddb0a01"),
+    ("10.170.201.25", "use1proddb0b01"),
+    ("10.170.201.103", "use1proddb0a01"),
+]
+
+
+def check_oracle_cron(ip):
+    cmd = [
+        "ssh",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ConnectTimeout=10",
+        f"{SSH_USER}@{ip}",
+        "sudo su - oracle -c 'crontab -l'",
+    ]
+
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=40
+    )
+
+
+def build_report():
+    report = []
+    report.append("Oracle Crontab Monitoring Report")
+    report.append(f"Generated: {datetime.now()}")
+    report.append("=" * 70)
+    report.append("")
+
+    for ip, name in HOSTS:
+        report.append("=" * 70)
+        report.append(f"Server: {name} ({ip})")
+        report.append("=" * 70)
+
+        try:
+            result = check_oracle_cron(ip)
+
+            if result.returncode == 0:
+                cron_output = result.stdout.strip()
+
+                if cron_output:
+                    report.append("Status: MONITORING FOUND")
+                    report.append("")
+                    report.append(cron_output)
+                else:
+                    report.append("Status: NO CRONTAB FOUND")
+
+            else:
+                report.append("Status: FAILED")
+                report.append(result.stderr.strip() or result.stdout.strip())
+
+        except subprocess.TimeoutExpired:
+            report.append("Status: TIMEOUT")
+
+        except Exception as e:
+            report.append(f"Status: ERROR - {str(e)}")
+
+        report.append("")
+
+    return "\n".join(report)
+
+
+def send_email(report):
+    msg = EmailMessage()
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(EMAIL_TO)
+    msg["Subject"] = f"Oracle Crontab Report - {datetime.now().strftime('%Y-%m-%d')}"
+
+    msg.set_content(report)
+
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        server.send_message(msg)
+
+
+def main():
+    report = build_report()
+
+    report_file = f"/tmp/oracle_cron_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    with open(report_file, "w") as f:
+        f.write(report)
+
+    send_email(report)
+
+    print(f"Report generated: {report_file}")
+    print("Email sent.")
+
+
+if __name__ == "__main__":
+    main()
