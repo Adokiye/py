@@ -42,13 +42,13 @@ def build_report():
     report.append("=" * 70)
     report.append("")
 
-    for host in HOSTS:
+    for ip, name in HOSTS:
         report.append("=" * 70)
-        report.append(f"Server: {host}")
+        report.append(f"Server: {name} ({ip})")
         report.append("=" * 70)
 
         try:
-            result = check_oracle_cron(host)
+            result = check_oracle_cron(ip)
 
             if result.returncode == 0:
                 cron_output = result.stdout.strip()
