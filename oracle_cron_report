@@ -13,25 +13,18 @@ SMTP_SERVER = "localhost"
 SMTP_PORT = 25
 
 HOSTS = [
-    ("10.35.195.10", "lhdb01"),
-    ("10.35.195.11", "lhdb02"),
-    ("10.35.195.21", "lhdb0a01"),
-    ("10.35.195.36", "lhdb0b01"),
-    ("10.173.29.45", "lhproddb0a01"),
-    ("10.173.29.75", "lhproddb0b01"),
-    ("10.168.50.52", "ratproddb0a01"),
-    ("10.170.201.25", "use1proddb0b01"),
-    ("10.170.201.103", "use1proddb0a01"),
+    "ausdbedw",
+    "ausdb0d",
 ]
 
 
-def check_oracle_cron(ip):
+def check_oracle_cron(host):
     cmd = [
         "ssh",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "ConnectTimeout=10",
-        f"{SSH_USER}@{ip}",
+        f"{SSH_USER}@{host}",
         "sudo su - oracle -c 'crontab -l'",
     ]
 
@@ -50,13 +43,13 @@ def build_report():
     report.append("=" * 70)
     report.append("")
 
-    for ip, name in HOSTS:
+    for host in HOSTS:
         report.append("=" * 70)
-        report.append(f"Server: {name} ({ip})")
+        report.append(f"Server: {host}")
         report.append("=" * 70)
 
         try:
-            result = check_oracle_cron(ip)
+            result = check_oracle_cron(host)
 
             if result.returncode == 0:
                 cron_output = result.stdout.strip()
