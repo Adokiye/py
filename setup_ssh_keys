@@ -2,9 +2,13 @@
 
 import os
 import subprocess
+import time
+import socket
 
 SSH_USER = "fsalami"
 SSH_KEY = os.path.expanduser("~/.ssh/id_rsa.pub")
+SSH_PORT = 22
+CONNECT_TIMEOUT = 10
 
 HOSTS = [
     ("10.168.50.52", "ratproddb0a01"),
@@ -12,19 +16,81 @@ HOSTS = [
     ("10.170.201.103", "use1proddb0a01"),
 ]
 
-for ip, name in HOSTS:
-    print(f"\nSetting up SSH key for {name} ({ip})")
 
+def check_reachable(ip, port, timeout):
+    print(f"  [1/3] Checking TCP reachability to {ip}:{port} (timeout {timeout}s)...")
+    start = time.monotonic()
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            elapsed = time.monotonic() - start
+            print(f"        OK - port {port} reachable in {elapsed:.2f}s")
+            return True
+    except (socket.timeout, OSError) as e:
+        elapsed = time.monotonic() - start
+        print(f"        FAIL - {e} (after {elapsed:.2f}s)")
+        return False
+
+
+def check_ssh_banner(ip, port, timeout):
+    print(f"  [2/3] Probing SSH banner on {ip}:{port}...")
+    start = time.monotonic()
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            banner = s.recv(256).decode(errors="replace").strip()
+            elapsed = time.monotonic() - start
+            print(f"        OK - banner: {banner!r} ({elapsed:.2f}s)")
+            return True
+    except (socket.timeout, OSError) as e:
+        elapsed = time.monotonic() - start
+        print(f"        FAIL - {e} (after {elapsed:.2f}s)")
+        return False
+
+
+if not os.path.exists(SSH_KEY):
+    print(f"ERROR: SSH public key not found at {SSH_KEY}")
+    raise SystemExit(1)
+
+print(f"Using SSH user: {SSH_USER}")
+print(f"Using SSH key:  {SSH_KEY}")
+print(f"Targets:        {len(HOSTS)} host(s)")
+
+overall_start = time.monotonic()
+results = []
+
+for idx, (ip, name) in enumerate(HOSTS, 1):
+    print(f"\n=== [{idx}/{len(HOSTS)}] {name} ({ip}) ===")
+    host_start = time.monotonic()
+
+    if not check_reachable(ip, SSH_PORT, CONNECT_TIMEOUT):
+        results.append((name, ip, "UNREACHABLE", time.monotonic() - host_start))
+        continue
+
+    if not check_ssh_banner(ip, SSH_PORT, CONNECT_TIMEOUT):
+        results.append((name, ip, "NO_SSH_BANNER", time.monotonic() - host_start))
+        continue
+
+    print(f"  [3/3] Running ssh-copy-id as {SSH_USER}@{ip}...")
     cmd = [
         "ssh-copy-id",
         "-o", "StrictHostKeyChecking=no",
+        "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
         "-i", SSH_KEY,
         f"{SSH_USER}@{ip}",
     ]
-
+    copy_start = time.monotonic()
     result = subprocess.run(cmd)
+    copy_elapsed = time.monotonic() - copy_start
+    host_elapsed = time.monotonic() - host_start
 
     if result.returncode == 0:
-        print(f"SUCCESS: {name} ({ip})")
+        print(f"        OK - key installed in {copy_elapsed:.2f}s (total {host_elapsed:.2f}s)")
+        results.append((name, ip, "SUCCESS", host_elapsed))
     else:
-        print(f"FAILED: {name} ({ip})")
+        print(f"        FAIL - ssh-copy-id exit {result.returncode} after {copy_elapsed:.2f}s")
+        results.append((name, ip, f"FAILED(rc={result.returncode})", host_elapsed))
+
+total_elapsed = time.monotonic() - overall_start
+print(f"\n=== Summary ({total_elapsed:.2f}s total) ===")
+for name, ip, status, elapsed in results:
+    print(f"  {status:20s} {name:18s} {ip:16s} {elapsed:.2f}s")
