@@ -13,18 +13,17 @@ SMTP_SERVER = "localhost"
 SMTP_PORT = 25
 
 HOSTS = [
-    "ausdbedw",
-    "ausdb0d",
+    ("10.172.136.141", "p01_teller_nonprod"),
 ]
 
 
-def check_oracle_cron(host):
+def check_oracle_cron(ip):
     cmd = [
         "ssh",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "ConnectTimeout=10",
-        f"{SSH_USER}@{host}",
+        f"{SSH_USER}@{ip}",
         "sudo su - oracle -c 'crontab -l'",
     ]
 

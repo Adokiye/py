@@ -11,27 +11,12 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 10
 
 HOSTS = [
-    "ausdbedw",
-    "ausdb0d",
+    ("10.172.136.141", "p01_teller_nonprod"),
 ]
 
 
-def resolve(host):
-    print(f"  [1/4] Resolving {host}...")
-    start = time.monotonic()
-    try:
-        ip = socket.gethostbyname(host)
-        elapsed = time.monotonic() - start
-        print(f"        OK - {host} -> {ip} ({elapsed:.2f}s)")
-        return ip
-    except socket.gaierror as e:
-        elapsed = time.monotonic() - start
-        print(f"        FAIL - {e} (after {elapsed:.2f}s)")
-        return None
-
-
-def check_reachable(host, ip, port, timeout):
-    print(f"  [2/4] Checking TCP reachability to {host} ({ip}):{port} (timeout {timeout}s)...")
+def check_reachable(ip, port, timeout):
+    print(f"  [1/3] Checking TCP reachability to {ip}:{port} (timeout {timeout}s)...")
     start = time.monotonic()
     try:
         with socket.create_connection((ip, port), timeout=timeout):
@@ -45,7 +30,7 @@ def check_reachable(host, ip, port, timeout):
 
 
 def check_ssh_banner(ip, port, timeout):
-    print(f"  [3/4] Probing SSH banner on {ip}:{port}...")
+    print(f"  [2/3] Probing SSH banner on {ip}:{port}...")
     start = time.monotonic()
     try:
         with socket.create_connection((ip, port), timeout=timeout) as s:
@@ -71,30 +56,33 @@ print(f"Targets:        {len(HOSTS)} host(s)")
 overall_start = time.monotonic()
 results = []
 
-for idx, host in enumerate(HOSTS, 1):
-    print(f"\n=== [{idx}/{len(HOSTS)}] {host} ===")
+for idx, (ip, name) in enumerate(HOSTS, 1):
+    print(f"\n=== [{idx}/{len(HOSTS)}] {name} ({ip}) ===")
     host_start = time.monotonic()
 
-    ip = resolve(host)
-    if ip is None:
-        results.append((host, "-", "DNS_FAIL", time.monotonic() - host_start))
-        continue
-
-    if not check_reachable(host, ip, SSH_PORT, CONNECT_TIMEOUT):
-        results.append((host, ip, "UNREACHABLE", time.monotonic() - host_start))
+    if not check_reachable(ip, SSH_PORT, CONNECT_TIMEOUT):
+        results.append((name, ip, "UNREACHABLE", time.monotonic() - host_start))
         continue
 
     if not check_ssh_banner(ip, SSH_PORT, CONNECT_TIMEOUT):
-        results.append((host, ip, "NO_SSH_BANNER", time.monotonic() - host_start))
+        results.append((name, ip, "NO_SSH_BANNER", time.monotonic() - host_start))
         continue
 
-    print(f"  [4/4] Running ssh-copy-id as {SSH_USER}@{host}...")
+    print(f"  [2b/3] Clearing any stale known_hosts entry for {ip}...")
+    rm = subprocess.run(
+        ["ssh-keygen", "-R", ip],
+        capture_output=True, text=True,
+    )
+    if rm.returncode == 0 and rm.stdout.strip():
+        print(f"        removed entry for {ip}")
+
+    print(f"  [3/3] Running ssh-copy-id as {SSH_USER}@{ip}...")
     cmd = [
         "ssh-copy-id",
         "-o", "StrictHostKeyChecking=no",
         "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
         "-i", SSH_KEY,
-        f"{SSH_USER}@{host}",
+        f"{SSH_USER}@{ip}",
     ]
     copy_start = time.monotonic()
     result = subprocess.run(cmd)
@@ -103,12 +91,12 @@ for idx, host in enumerate(HOSTS, 1):
 
     if result.returncode == 0:
         print(f"        OK - key installed in {copy_elapsed:.2f}s (total {host_elapsed:.2f}s)")
-        results.append((host, ip, "SUCCESS", host_elapsed))
+        results.append((name, ip, "SUCCESS", host_elapsed))
     else:
         print(f"        FAIL - ssh-copy-id exit {result.returncode} after {copy_elapsed:.2f}s")
-        results.append((host, ip, f"FAILED(rc={result.returncode})", host_elapsed))
+        results.append((name, ip, f"FAILED(rc={result.returncode})", host_elapsed))
 
 total_elapsed = time.monotonic() - overall_start
 print(f"\n=== Summary ({total_elapsed:.2f}s total) ===")
-for host, ip, status, elapsed in results:
-    print(f"  {status:20s} {host:18s} {ip:16s} {elapsed:.2f}s")
+for name, ip, status, elapsed in results:
+    print(f"  {status:20s} {name:25s} {ip:16s} {elapsed:.2f}s")
