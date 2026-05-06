@@ -11,7 +11,8 @@ SSH_PORT = 22
 CONNECT_TIMEOUT = 10
 
 HOSTS = [
-    ("10.172.136.141", "p01_teller_nonprod"),
+    # ("10.172.136.141", "p01_teller_nonprod"),
+    ("10.172.136.190", "p01_mrkt_nonprod"),
 ]
 
 

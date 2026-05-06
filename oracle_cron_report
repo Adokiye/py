@@ -18,7 +18,8 @@ SMTP_SERVER = "localhost"
 SMTP_PORT = 25
 
 HOSTS = [
-    ("10.172.136.141", "p01_teller_nonprod"),
+    # ("10.172.136.141", "p01_teller_nonprod"),
+    ("10.172.136.190", "p01_mrkt_nonprod"),
 ]
 
 SHEET_HEADERS = ["timestamp", "server", "ip", "status", "cron_line"]
